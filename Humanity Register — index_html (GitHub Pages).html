@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Humanity Register</title>
+<style>
+  html,body{margin:0;padding:0;background:#f8fafc;-webkit-text-size-adjust:100%}
+  #root{min-height:100vh}
+  .regRow:hover{background:#eff6ff}
+  .regRow{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+  input,select,button{font-size:16px}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"><div style="padding:40px;text-align:center;font-family:system-ui;color:#94a3b8">Loading registry…</div></div>
+
+<script>
+/* ═══ STORAGE SHIM ═══════════════════════════════════════════════════════════
+   Inside Claude, window.storage exists. On GitHub Pages it doesn't, so this
+   shim saves to the visitor's own browser (localStorage).
+   NOTE: localStorage is per-browser, NOT a shared registry. For a real shared
+   list, replace these three methods with calls to a backend (e.g. Supabase).
+   ════════════════════════════════════════════════════════════════════════════ */
+window.storage = window.storage || {
+  async get(k){ const v=localStorage.getItem("hr:"+k); if(v===null) throw new Error("not found"); return {key:k,value:v}; },
+  async set(k,v){ localStorage.setItem("hr:"+k,v); return {key:k,value:v}; },
+  async delete(k){ localStorage.removeItem("hr:"+k); return {key:k,deleted:true}; },
+};
+</script>
+
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo}=React;
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+const fmt6   = n  => `HM-${String(n).padStart(6,"0")}`;
+const MO     = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtD   = s  => { if(!s) return "—"; const [y,m,d]=s.split("-"); return `${+d} ${MO[+m-1]} ${y}`; };
+const calcAg = s  => { if(!s) return null; const b=new Date(s); if(isNaN(b)) return null; const n=new Date(); let a=n.getFullYear()-b.getFullYear(); if(n<new Date(n.getFullYear(),b.getMonth(),b.getDate())) a--; return a; };
+const gmUrl  = (la,lo) => `https://maps.google.com/maps?q=${la},${lo}&z=12`;
+
+// ── Verification levels ───────────────────────────────────────────────────────
+const VL = {
+  none:  { icon:"○", label:"Unverified",     fg:"#9ca3af", bg:"#f9fafb", bd:"#e5e7eb" },
+  email: { icon:"◑", label:"Email Verified", fg:"#d97706", bg:"#fffbeb", bd:"#fde68a" },
+  govId: { icon:"●", label:"ID Verified",    fg:"#16a34a", bg:"#f0fdf4", bd:"#bbf7d0" },
+};
+
+// ── Language / i18n ───────────────────────────────────────────────────────────
+const NL_SCRIPTS = {
+  zh:"Simplified Chinese characters", ja:"Japanese (katakana for foreign names)",
+  ko:"Korean Hangul", ar:"Arabic script", hi:"Hindi Devanagari",
+  ru:"Russian Cyrillic", th:"Thai script", he:"Hebrew script", el:"Greek script",
+};
+const RTL = new Set(["ar","he","fa","ur"]);
+const LANGS = [
+  {c:"en",l:"English",f:"🇺🇸"},{c:"zh",l:"中文",f:"🇨🇳"},{c:"es",l:"Español",f:"🇪🇸"},
+  {c:"fr",l:"Français",f:"🇫🇷"},{c:"de",l:"Deutsch",f:"🇩🇪"},{c:"ja",l:"日本語",f:"🇯🇵"},
+  {c:"ko",l:"한국어",f:"🇰🇷"},{c:"ar",l:"العربية",f:"🇸🇦"},{c:"ru",l:"Русский",f:"🇷🇺"},
+  {c:"hi",l:"हिन्दी",f:"🇮🇳"},{c:"pt",l:"Português",f:"🇧🇷"},{c:"it",l:"Italiano",f:"🇮🇹"},
+];
+
+const BASE = {
+  title:"Humanity Register", subtitle:"A voluntary public registry of people — community built, open to all",
+  listed:"people listed", search:"Search name, nationality, or ID…", allNats:"All nationalities",
+  all:"All", male:"Male", female:"Female", nb:"Non-binary", clear:"Clear", addBtn:"+ Add Person",
+  entry:"entry", entries:"entries", of:"of",
+  hint:"Hover a row for details · Mobile: tap & hold",
+  noResults:"No entries match your filters.", tryDiff:"Try a different search or", clearF:"clear filters",
+  addTitle:"Add to Registry", adultNote:"Adults (18+) · Voluntary · Public listing",
+  consent:"By submitting, you confirm this person is 18+ and consents to public listing.",
+  reqSec:"Required", optSec:"Optional — visible in hover card",
+  fnLbl:"First name", lnLbl:"Last name", sexLbl:"Sex", natLbl:"Nationality", dobLbl:"Date of birth",
+  hometownLbl:"Hometown / Region", eyeLbl:"Eye color", hairLbl:"Hair color",
+  parentsLbl:"Parents' names", siblingsLbl:"Siblings' names", childrenLbl:"Children's names", spouseLbl:"Spouse / Partner",
+  cancel:"Cancel", submit:"Add to Register",
+  colName:"Name", colSex:"Sex", colNat:"Nationality", colBorn:"Born",
+  verifyBtn:"Verify", verifyTitle:"Verify This Entry",
+  verifyDesc:"Add a trust badge to confirm this entry belongs to a real person.",
+  vEmailTab:"Email Verification", vEmailDesc:"Confirm via a one-time code.",
+  vGovTab:"Government ID", vGovDesc:"Full identity check via passport, national ID, or driver's license.",
+  vGovNote:"Requires backend integration — configure BACKEND_VERIFY in source code.",
+  demoHint:"Demo code:", enterCode:"Enter code", badCode:"Invalid code.",
+  configureBackend:"Configure backend to enable →",
+  verifyEntry:"Verify this entry →", age:"age", mapLbl:"map",
+  htLbl:"Hometown", paLbl:"Parents", siLbl:"Siblings", chLbl:"Children", spLbl:"Spouse",
+  footer:"All entries are voluntary and self-submitted · Adults (18+) who have consented to public listing only",
+  selectNat:"Select nationality…", filterType:"Type to filter…", noMatch:"No match",
+  locSearch:"Search for a city or town…", locConfirmed:"Location confirmed",
+  locHint:"Search and select for map link", powered:"powered by OpenStreetMap", mapPreview:"Preview on Google Maps ↗",
+  loadingUI:"Translating interface…", loadingNames:"Translating names…", langLabel:"Language",
+};
+
+const BADGE = {
+  M: {bg:"#eff6ff",fg:"#1d4ed8",br:"#bfdbfe"}, F: {bg:"#fdf2f8",fg:"#be185d",br:"#fbcfe8"},
+  NB:{bg:"#faf5ff",fg:"#7c3aed",br:"#ddd6fe"},
+};
+const NATS = ["Afghan","Albanian","Algerian","American","Argentine","Armenian","Australian","Austrian","Azerbaijani","Bahraini","Bangladeshi","Belarusian","Belgian","Bolivian","Bosnian","Brazilian","British","Bulgarian","Cameroonian","Canadian","Chilean","Chinese","Colombian","Congolese","Croatian","Cuban","Czech","Danish","Dominican","Dutch","Ecuadorian","Egyptian","Emirati","Estonian","Ethiopian","Filipino","Finnish","French","Georgian","German","Ghanaian","Greek","Guatemalan","Haitian","Hungarian","Indian","Indonesian","Iranian","Iraqi","Irish","Israeli","Italian","Ivorian","Jamaican","Japanese","Jordanian","Kazakh","Kenyan","Korean","Kuwaiti","Latvian","Lebanese","Libyan","Lithuanian","Malaysian","Malian","Mexican","Moldovan","Mongolian","Moroccan","Nepali","New Zealander","Nigerian","Norwegian","Omani","Pakistani","Palestinian","Peruvian","Polish","Portuguese","Qatari","Romanian","Russian","Rwandan","Saudi","Senegalese","Serbian","Singaporean","Slovak","Somali","South African","Spanish","Sri Lankan","Sudanese","Swedish","Swiss","Syrian","Taiwanese","Thai","Tunisian","Turkish","Ugandan","Ukrainian","Uruguayan","Venezuelan","Vietnamese","Yemeni","Zambian","Zimbabwean"];
+
+const NAT_FLAGS = {
+  "Afghan":"🇦🇫","Albanian":"🇦🇱","Algerian":"🇩🇿","American":"🇺🇸","Argentine":"🇦🇷",
+  "Armenian":"🇦🇲","Australian":"🇦🇺","Austrian":"🇦🇹","Azerbaijani":"🇦🇿","Bahraini":"🇧🇭",
+  "Bangladeshi":"🇧🇩","Belarusian":"🇧🇾","Belgian":"🇧🇪","Bolivian":"🇧🇴","Bosnian":"🇧🇦",
+  "Brazilian":"🇧🇷","British":"🇬🇧","Bulgarian":"🇧🇬","Cameroonian":"🇨🇲","Canadian":"🇨🇦",
+  "Chilean":"🇨🇱","Chinese":"🇨🇳","Colombian":"🇨🇴","Congolese":"🇨🇩","Croatian":"🇭🇷",
+  "Cuban":"🇨🇺","Czech":"🇨🇿","Danish":"🇩🇰","Dominican":"🇩🇴","Dutch":"🇳🇱",
+  "Ecuadorian":"🇪🇨","Egyptian":"🇪🇬","Emirati":"🇦🇪","Estonian":"🇪🇪","Ethiopian":"🇪🇹",
+  "Filipino":"🇵🇭","Finnish":"🇫🇮","French":"🇫🇷","Georgian":"🇬🇪","German":"🇩🇪",
+  "Ghanaian":"🇬🇭","Greek":"🇬🇷","Guatemalan":"🇬🇹","Haitian":"🇭🇹","Hungarian":"🇭🇺",
+  "Indian":"🇮🇳","Indonesian":"🇮🇩","Iranian":"🇮🇷","Iraqi":"🇮🇶","Irish":"🇮🇪",
+  "Israeli":"🇮🇱","Italian":"🇮🇹","Ivorian":"🇨🇮","Jamaican":"🇯🇲","Japanese":"🇯🇵",
+  "Jordanian":"🇯🇴","Kazakh":"🇰🇿","Kenyan":"🇰🇪","Korean":"🇰🇷","Kuwaiti":"🇰🇼",
+  "Latvian":"🇱🇻","Lebanese":"🇱🇧","Libyan":"🇱🇾","Lithuanian":"🇱🇹","Malaysian":"🇲🇾",
+  "Malian":"🇲🇱","Mexican":"🇲🇽","Moldovan":"🇲🇩","Mongolian":"🇲🇳","Moroccan":"🇲🇦",
+  "Nepali":"🇳🇵","New Zealander":"🇳🇿","Nigerian":"🇳🇬","Norwegian":"🇳🇴","Omani":"🇴🇲",
+  "Pakistani":"🇵🇰","Palestinian":"🇵🇸","Peruvian":"🇵🇪","Polish":"🇵🇱","Portuguese":"🇵🇹",
+  "Qatari":"🇶🇦","Romanian":"🇷🇴","Russian":"🇷🇺","Rwandan":"🇷🇼","Saudi":"🇸🇦",
+  "Senegalese":"🇸🇳","Serbian":"🇷🇸","Singaporean":"🇸🇬","Slovak":"🇸🇰","Somali":"🇸🇴",
+  "South African":"🇿🇦","Spanish":"🇪🇸","Sri Lankan":"🇱🇰","Sudanese":"🇸🇩","Swedish":"🇸🇪",
+  "Swiss":"🇨🇭","Syrian":"🇸🇾","Taiwanese":"🇹🇼","Thai":"🇹🇭","Tunisian":"🇹🇳",
+  "Turkish":"🇹🇷","Ugandan":"🇺🇬","Ukrainian":"🇺🇦","Uruguayan":"🇺🇾","Venezuelan":"🇻🇪",
+  "Vietnamese":"🇻🇳","Yemeni":"🇾🇪","Zambian":"🇿🇲","Zimbabwean":"🇿🇼",
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  BACKEND VERIFICATION STUBS  (replace with real API calls for production)
+//
+//  Recommended flow with a global provider (Persona / Veriff / Onfido / Jumio):
+//   1. initiate()    → your server creates a verification session, returns a
+//                      hosted-flow URL or SDK token.
+//   2. User completes ID photo + selfie in the provider's hosted flow.
+//   3. Provider sends a webhook to YOUR server with the result + name/DOB.
+//   4. check()/updateRecord() → server compares to the entry, marks it "govId".
+//  Keep API keys on the server only. Store the result flag, never ID images.
+// ══════════════════════════════════════════════════════════════════════════════
+const BACKEND_VERIFY = {
+  async initiate(method, personId, countryCode) {
+    // TODO: POST /api/verify/start  { method, personId, countryCode }
+    throw new Error("BACKEND_VERIFY.initiate — not configured.");
+  },
+  async check(sessionToken) {
+    // TODO: POST /api/verify/check  { sessionToken }  → { verified, level:"govId", confirmedName }
+    throw new Error("BACKEND_VERIFY.check — not configured.");
+  },
+  async updateRecord(personId, level, confirmedName) {
+    // TODO: PATCH /api/persons/:personId/verify  { level, confirmedName }
+    throw new Error("BACKEND_VERIFY.updateRecord — not configured.");
+  },
+};
+const DEMO_CODE = "DEMO"; // swap with a real email-code service in production
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TRANSLATION PROXY
+//  On GitHub Pages there is no Claude login, so UI translation and name
+//  transliteration need your own small server. Put its URL below.
+//  Contract:  POST { prompt, maxTok }  →  { text: "<model reply>" }
+//  Leave empty to keep the site in English (everything else still works).
+// ══════════════════════════════════════════════════════════════════════════════
+const TRANSLATE_PROXY = "";
+
+const callClaude = async (prompt, maxTok=2500) => {
+  if(!TRANSLATE_PROXY) throw new Error("Translation proxy not configured");
+  const r = await fetch(TRANSLATE_PROXY, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ prompt, maxTok }),
+  });
+  const d = await r.json();
+  return d.text||"";
+};
+const safeJSON = t => { try { return JSON.parse(t.replace(/```json\n?|```/g,"").trim()); } catch { return null; } };
+
+const fetchUITranslation = async (langCode, langLabel) => {
+  const raw = await callClaude(
+    `Translate these UI strings from English to ${langLabel} (code: ${langCode}). ` +
+    `Return ONLY valid JSON, same keys, translated values. Keep "·", "+", emoji, and parentheses intact. ` +
+    `Do not translate proper nouns or ID formats like HM-000001.\nStrings:\n${JSON.stringify(BASE)}`
+  );
+  return safeJSON(raw);
+};
+const fetchTranslit = async (nameList, script) => {
+  const raw = await callClaude(
+    `Phonetically transliterate these names into ${script}. Each item is "firstName|lastName". ` +
+    `Return ONLY valid JSON: {"firstName|lastName":"translitFirstName|translitLastName", ...}\n` +
+    `Names: ${JSON.stringify(nameList)}`, 3000
+  );
+  return safeJSON(raw) || {};
+};
+
+// ── Sample data (delete these before launch if you don't want demo people) ───
+const SAMPLE = [
+  {id:"s01",serialId:"HM-000001",firstName:"James",   lastName:"Harrington",sex:"M", nationality:"American", birthDate:"1985-07-22",hometown:"Chicago, Illinois, USA",   hometownMapUrl:gmUrl(41.8781,-87.6298), eyeColor:"Blue",      hairColor:"Brown",      parents:"Robert Harrington, Susan Harrington",siblings:"Emily Harrington",           children:"Liam Harrington",          spouse:"Claire Harrington",verificationLevel:"govId", addedAt:1717200000000},
+  {id:"s02",serialId:"HM-000002",firstName:"Yuki",    lastName:"Tanaka",    sex:"F", nationality:"Japanese", birthDate:"1993-11-08",hometown:"Kyoto, Japan",             hometownMapUrl:gmUrl(35.0116,135.7681), eyeColor:"Dark Brown", hairColor:"Black",      parents:"Kenji Tanaka, Hiromi Tanaka",       siblings:"",                          children:"",                         spouse:"",                verificationLevel:"email",addedAt:1717300000000},
+  {id:"s03",serialId:"HM-000003",firstName:"Alex",    lastName:"Müller",    sex:"NB",nationality:"German",   birthDate:"1998-02-14",hometown:"Berlin, Germany",          hometownMapUrl:gmUrl(52.5200,13.4050),  eyeColor:"Green",      hairColor:"Blonde",     parents:"Hans Müller, Ingrid Müller",        siblings:"Petra Müller, Klaus Müller", children:"",                         spouse:"",                verificationLevel:"none", addedAt:1717400000000},
+  {id:"s04",serialId:"HM-000004",firstName:"Amara",   lastName:"Okafor",    sex:"F", nationality:"Nigerian", birthDate:"1979-05-30",hometown:"Lagos, Nigeria",           hometownMapUrl:gmUrl(6.5244,3.3792),    eyeColor:"Dark Brown", hairColor:"Black",      parents:"Chukwuemeka Okafor, Ngozi Okafor",siblings:"Emeka Okafor, Chioma Okafor",children:"Temi Okafor, Bayo Okafor", spouse:"Tunde Adeyemi",   verificationLevel:"govId", addedAt:1717500000000},
+  {id:"s05",serialId:"HM-000005",firstName:"Lucas",   lastName:"Moreau",    sex:"M", nationality:"French",   birthDate:"2001-09-03",hometown:"Lyon, France",             hometownMapUrl:gmUrl(45.7484,4.8467),   eyeColor:"Brown",      hairColor:"Dark Brown", parents:"Philippe Moreau, Isabelle Moreau",  siblings:"",                          children:"",                         spouse:"",                verificationLevel:"none", addedAt:1717600000000},
+  {id:"s06",serialId:"HM-000006",firstName:"Priya",   lastName:"Sharma",    sex:"F", nationality:"Indian",   birthDate:"1990-12-17",hometown:"Mumbai, India",            hometownMapUrl:gmUrl(19.0760,72.8777),  eyeColor:"Dark Brown", hairColor:"Black",      parents:"Rajesh Sharma, Meera Sharma",      siblings:"Arjun Sharma",              children:"",                         spouse:"Vikram Nair",     verificationLevel:"email",addedAt:1717700000000},
+  {id:"s07",serialId:"HM-000007",firstName:"Carlos",  lastName:"Rivera",    sex:"M", nationality:"Mexican",  birthDate:"1977-04-05",hometown:"Guadalajara, Mexico",       hometownMapUrl:gmUrl(20.6597,-103.3496),eyeColor:"Brown",      hairColor:"Black",      parents:"Miguel Rivera, Rosa Rivera",       siblings:"Ana Rivera, Jose Rivera",   children:"Sofia Rivera, Marco Rivera",spouse:"Elena Torres",    verificationLevel:"govId", addedAt:1717800000000},
+  {id:"s08",serialId:"HM-000008",firstName:"Olena",   lastName:"Kovalenko", sex:"F", nationality:"Ukrainian",birthDate:"1995-08-23",hometown:"Lviv, Ukraine",            hometownMapUrl:gmUrl(49.8397,24.0297),  eyeColor:"Blue",       hairColor:"Blonde",     parents:"Mykola Kovalenko, Iryna Kovalenko",siblings:"",                         children:"",                         spouse:"",                verificationLevel:"none", addedAt:1717900000000},
+  {id:"s09",serialId:"HM-000009",firstName:"Mohammed",lastName:"Al-Rashid", sex:"M", nationality:"Saudi",    birthDate:"1983-03-11",hometown:"Riyadh, Saudi Arabia",      hometownMapUrl:gmUrl(24.6877,46.7220),  eyeColor:"Dark Brown", hairColor:"Black",      parents:"Ahmad Al-Rashid, Fatima Al-Rashid",siblings:"Omar Al-Rashid",           children:"Khalid, Nora Al-Rashid",   spouse:"Reem Al-Mansour", verificationLevel:"email",addedAt:1718000000000},
+  {id:"s10",serialId:"HM-000010",firstName:"Sofia",   lastName:"Benedetti", sex:"F", nationality:"Italian",  birthDate:"1988-06-20",hometown:"Florence, Italy",          hometownMapUrl:gmUrl(43.7696,11.2558),  eyeColor:"Hazel",      hairColor:"Brown",      parents:"Marco Benedetti, Laura Benedetti",  siblings:"Giulia Benedetti",         children:"",                         spouse:"",                verificationLevel:"govId", addedAt:1718100000000},
+  {id:"s11",serialId:"HM-000011",firstName:"Jin",     lastName:"Park",      sex:"M", nationality:"Korean",   birthDate:"1996-01-30",hometown:"Seoul, South Korea",       hometownMapUrl:gmUrl(37.5665,126.9780), eyeColor:"Dark Brown", hairColor:"Black",      parents:"Park Jae-won, Kim Soo-jin",        siblings:"Park Ji-yeon",             children:"",                         spouse:"",                verificationLevel:"none", addedAt:1718200000000},
+  {id:"s12",serialId:"HM-000012",firstName:"Isabela", lastName:"Costa",     sex:"F", nationality:"Brazilian",birthDate:"2000-10-14",hometown:"Rio de Janeiro, Brazil",    hometownMapUrl:gmUrl(-22.9068,-43.1729),eyeColor:"Green",      hairColor:"Dark Brown", parents:"Roberto Costa, Lucia Costa",       siblings:"Mateus Costa",             children:"",                         spouse:"",                verificationLevel:"email",addedAt:1718300000000},
+];
+
+// ── Shared styles ─────────────────────────────────────────────────────────────
+const inp = (err,foc) => ({width:"100%",fontSize:16,border:`1.5px solid ${err?"#fca5a5":foc?"#93c5fd":"#e5e7eb"}`,borderRadius:10,padding:"8px 12px",outline:"none",boxSizing:"border-box",fontFamily:"inherit",background:err?"#fff5f5":"#fff",transition:"border-color 0.15s"});
+const lbl = {display:"block",fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"};
+
+// ── VBadge ────────────────────────────────────────────────────────────────────
+function VBadge({ level, full }) {
+  const v = VL[level]||VL.none;
+  if (!full) return <span style={{color:v.fg,fontSize:12}} title={v.label}>{v.icon}</span>;
+  return <span style={{display:"inline-flex",alignItems:"center",gap:4,background:v.bg,color:v.fg,border:`1px solid ${v.bd}`,borderRadius:99,padding:"2px 9px",fontSize:11,fontWeight:700}}>{v.icon} {v.label}</span>;
+}
+
+// ── LangSelect ────────────────────────────────────────────────────────────────
+function LangSelect({ current, onChange }) {
+  const [open,setOpen]=useState(false); const ref=useRef(null);
+  const cur=LANGS.find(l=>l.c===current)||LANGS[0];
+  useEffect(()=>{ const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);}; document.addEventListener("mousedown",h); document.addEventListener("touchstart",h); return()=>{document.removeEventListener("mousedown",h);document.removeEventListener("touchstart",h);}; },[]);
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{fontSize:12,fontWeight:600,padding:"6px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#fff",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5,color:"#374151"}}>
+        {cur.f} {cur.l} <span style={{fontSize:9,color:"#9ca3af"}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&<div style={{position:"absolute",top:"calc(100% + 4px)",right:0,background:"#fff",border:"1px solid #e5e7eb",borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,0.1)",zIndex:60,overflow:"hidden",minWidth:150}}>
+        {LANGS.map(l=>(
+          <div key={l.c} onClick={()=>{onChange(l.c);setOpen(false);}}
+            style={{padding:"9px 12px",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",gap:8,background:l.c===current?"#eff6ff":"transparent",color:l.c===current?"#1d4ed8":"#374151",fontWeight:l.c===current?700:400}}>
+            {l.f} {l.l}
+          </div>
+        ))}
+      </div>}
+    </div>
+  );
+}
+
+// ── FormField ─────────────────────────────────────────────────────────────────
+function FormField({ label, value, onChange, error, req, ph, type="text", max }) {
+  const [foc,setFoc]=useState(false);
+  return <div><label style={lbl}>{label}{req&&<span style={{color:"#f87171",marginLeft:3}}>*</span>}</label>
+    <input type={type} value={value||""} onChange={onChange} placeholder={ph||""} max={max}
+      style={inp(error,foc)} onFocus={()=>setFoc(true)} onBlur={()=>setFoc(false)}/>
+    {error&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ef4444"}}>{error}</p>}
+  </div>;
+}
+
+// ── NatSelect ─────────────────────────────────────────────────────────────────
+function NatSelect({ value, onChange, error, t }) {
+  const [q,setQ]=useState(""); const [open,setOpen]=useState(false); const ref=useRef(null);
+  const fil=q?NATS.filter(n=>n.toLowerCase().includes(q.toLowerCase())):NATS;
+  useEffect(()=>{ const h=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setQ("");}}; document.addEventListener("mousedown",h); document.addEventListener("touchstart",h); return()=>{document.removeEventListener("mousedown",h);document.removeEventListener("touchstart",h);}; },[]);
+  return <div ref={ref} style={{position:"relative"}}>
+    <div onClick={()=>setOpen(o=>!o)} style={{...inp(error,open),cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",userSelect:"none"}}>
+      <span style={{color:value?"#111827":"#9ca3af"}}>{value?`${NAT_FLAGS[value]||""} ${value}`:t.selectNat}</span>
+      <span style={{fontSize:10,color:"#9ca3af"}}>{open?"▲":"▼"}</span>
+    </div>
+    {open&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid #e5e7eb",borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,0.1)",zIndex:70,overflow:"hidden"}}>
+      <div style={{padding:"6px 10px",borderBottom:"1px solid #f3f4f6"}}><input autoFocus type="text" value={q} onChange={e=>setQ(e.target.value)} placeholder={t.filterType} style={{width:"100%",fontSize:16,border:"none",outline:"none",fontFamily:"inherit",background:"transparent"}}/></div>
+      <div style={{maxHeight:176,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
+        {fil.length>0?fil.map(n=><div key={n} onClick={()=>{onChange(n);setOpen(false);setQ("");}}
+          style={{padding:"9px 12px",cursor:"pointer",fontSize:14,color:"#374151",background:n===value?"#eff6ff":"transparent",fontWeight:n===value?700:400}}><span style={{marginRight:7,fontSize:16}}>{NAT_FLAGS[n]||""}</span>{n}</div>)
+        :<div style={{padding:"10px",fontSize:12,color:"#9ca3af",textAlign:"center"}}>{t.noMatch}</div>}
+      </div>
+    </div>}
+    {error&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ef4444"}}>{error}</p>}
+  </div>;
+}
+
+// ── HometownInput ─────────────────────────────────────────────────────────────
+function HometownInput({ value, mapUrl, onSelect, onClear, t }) {
+  const [q,setQ]=useState(value||""); const [sugs,setSugs]=useState([]); const [busy,setBusy]=useState(false); const [open,setOpen]=useState(false);
+  const deb=useRef(null); const ref=useRef(null); const ok=!!(value&&mapUrl);
+  useEffect(()=>{ const h=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setSugs([]);}}; document.addEventListener("mousedown",h); document.addEventListener("touchstart",h); return()=>{document.removeEventListener("mousedown",h);document.removeEventListener("touchstart",h);}; },[]);
+  const search=async qry=>{
+    if(qry.length<2){setSugs([]);setOpen(false);return;} setBusy(true);
+    try{ const r=await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(qry)}&limit=6`); const d=await r.json();
+      const items=(d.features||[]).map(f=>{ const p=f.properties,[lo,la]=f.geometry.coordinates; const pl=p.name||p.city||p.town||p.village||p.county||""; const pts=[pl,p.country].filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i); return{display:pts.join(", "),lat:la,lon:lo}; }).filter(f=>f.display);
+      setSugs(items); setOpen(items.length>0);
+    }catch{} setBusy(false);
+  };
+  const handleChange=e=>{ const v=e.target.value; setQ(v); onClear(); if(!v){setSugs([]);setOpen(false);return;} clearTimeout(deb.current); deb.current=setTimeout(()=>search(v),420); };
+  const pick=item=>{ const mu=gmUrl(item.lat,item.lon); setQ(item.display); setSugs([]); setOpen(false); onSelect({display:item.display,lat:item.lat,lon:item.lon,mapUrl:mu}); };
+  return <div ref={ref} style={{position:"relative"}}>
+    <div style={{position:"relative"}}>
+      <input value={q} onChange={handleChange} placeholder={t.locSearch} autoComplete="off"
+        style={{...inp(false,false),borderColor:ok?"#86efac":"#e5e7eb",background:ok?"#f0fdf4":"#fff",paddingRight:34}}/>
+      <span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:13,pointerEvents:"none"}}>{busy?"⏳":ok?"✅":"📍"}</span>
+    </div>
+    {open&&sugs.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid #e5e7eb",borderRadius:10,boxShadow:"0 6px 20px rgba(0,0,0,0.12)",zIndex:60,overflow:"hidden"}}>
+      {sugs.map((s,i)=><div key={i} onClick={()=>pick(s)} style={{padding:"10px 14px",cursor:"pointer",fontSize:14,color:"#374151",borderBottom:i<sugs.length-1?"1px solid #f3f4f6":"none"}}>📍 {s.display}</div>)}
+    </div>}
+    <p style={{margin:"4px 0 0",fontSize:11,color:ok?"#16a34a":"#9ca3af"}}>{ok?<>✓ {t.locConfirmed} · <a href={mapUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2563eb",textDecoration:"none",fontWeight:600}}>{t.mapPreview}</a></>:<>{t.locHint} · <span>{t.powered}</span></>}</p>
+  </div>;
+}
+
+// ── HoverCard ─────────────────────────────────────────────────────────────────
+function HoverCard({ person, rect, onEnter, onLeave, t, translit, onVerify }) {
+  const b=BADGE[person.sex], ag=calcAg(person.birthDate);
+  const key=`${person.firstName}|${person.lastName}`;
+  const tlit=translit[key]; const [tFn,tLn]=tlit?tlit.split("|"):[person.firstName,person.lastName];
+  const opts=[
+    person.hometown  ?[t.htLbl,person.hometown,  person.hometownMapUrl]:null,
+    person.eyeColor  ?[t.eyeLbl,person.eyeColor,  null]:null,
+    person.hairColor ?[t.hairLbl,person.hairColor, null]:null,
+    person.parents   ?[t.paLbl,person.parents,   null]:null,
+    person.siblings  ?[t.siLbl,person.siblings,  null]:null,
+    person.children  ?[t.chLbl,person.children,  null]:null,
+    person.spouse    ?[t.spLbl,person.spouse,    null]:null,
+  ].filter(Boolean);
+  const vw=window.innerWidth,vh=window.innerHeight;
+  const W=Math.min(286,vw-16);
+  let top=rect.bottom+6,left=rect.left+16;
+  if(left+W>vw-8) left=vw-W-8; if(left<8) left=8;
+  if(top+310>vh) top=Math.max(rect.top-310,8);
+  return <div data-hc="1" onMouseEnter={onEnter} onMouseLeave={onLeave} style={{position:"fixed",top,left,width:W,zIndex:999,background:"#fff",border:"1px solid #e5e7eb",borderRadius:16,boxShadow:"0 8px 30px rgba(0,0,0,0.14)",overflow:"hidden"}}>
+    <div style={{background:"#f9fafb",borderBottom:"1px solid #f1f5f9",padding:"14px 16px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+        <div style={{width:38,height:38,borderRadius:"50%",flexShrink:0,background:"linear-gradient(135deg,#e2e8f0,#cbd5e1)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,color:"#64748b"}}>{person.firstName?.[0]}{person.lastName?.[0]}</div>
+        <div>
+          <div style={{fontWeight:700,fontSize:14,color:"#111827",lineHeight:1.2}}>{tFn} {tLn}</div>
+          {tlit&&<div style={{fontSize:11,color:"#9ca3af"}}>{person.firstName} {person.lastName}</div>}
+          <div style={{fontSize:11,color:"#9ca3af",fontFamily:"monospace",marginTop:2}}>{person.serialId}</div>
+          <div style={{marginTop:4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <VBadge level={person.verificationLevel} full/>
+            <span style={{fontSize:12,color:"#6b7280"}}>· {NAT_FLAGS[person.nationality]||""} {person.nationality} · <span style={{display:"inline-block",background:b.bg,color:b.fg,border:`1px solid ${b.br}`,borderRadius:99,padding:"1px 7px",fontSize:11,fontWeight:700}}>{person.sex}</span></span>
+          </div>
+        </div>
+      </div>
+      <div style={{fontSize:12,color:"#374151"}}><span style={{fontWeight:600}}>Born:</span> {fmtD(person.birthDate)}{ag!==null&&<span style={{color:"#9ca3af",marginLeft:6}}>· {t.age} {ag}</span>}</div>
+    </div>
+    {opts.length>0?<div style={{padding:"10px 16px 12px"}}>
+      {opts.map(([lb,val,link])=><div key={lb} style={{display:"flex",gap:8,fontSize:12,marginBottom:5,alignItems:"flex-start"}}>
+        <span style={{color:"#9ca3af",width:62,flexShrink:0,paddingTop:1}}>{lb}</span>
+        <span style={{color:"#374151",lineHeight:1.4}}>{val}{link&&<a href={link} target="_blank" rel="noopener noreferrer" style={{marginLeft:6,color:"#2563eb",fontSize:11,textDecoration:"none"}}>🗺 {t.mapLbl}</a>}</span>
+      </div>)}
+    </div>:<div style={{padding:"12px 16px",fontSize:12,color:"#9ca3af",fontStyle:"italic"}}>No additional details.</div>}
+    {person.verificationLevel!=="govId"&&<div style={{borderTop:"1px solid #f3f4f6",padding:"8px 16px"}}>
+      <button onClick={()=>onVerify(person)} style={{fontSize:13,color:"#2563eb",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0,fontWeight:600}}>{t.verifyEntry}</button>
+    </div>}
+  </div>;
+}
+
+// ── PersonRow ─────────────────────────────────────────────────────────────────
+function PersonRow({ n, person, onEnter, onLeave, translit }) {
+  const ref=useRef(null),tt=useRef(null),b=BADGE[person.sex];
+  const key=`${person.firstName}|${person.lastName}`;
+  const tlit=translit[key]; const [tFn,tLn]=tlit?tlit.split("|"):[person.firstName,person.lastName];
+  return <tr ref={ref} className="regRow" style={{borderBottom:"1px solid #f3f4f6",cursor:"default"}}
+    onMouseEnter={()=>{const r=ref.current?.getBoundingClientRect();if(r)onEnter(person,r);}} onMouseLeave={onLeave}
+    onTouchStart={()=>{tt.current=setTimeout(()=>{const r=ref.current?.getBoundingClientRect();if(r)onEnter(person,r);},500);}}
+    onTouchMove={()=>clearTimeout(tt.current)} onTouchEnd={()=>clearTimeout(tt.current)} onTouchCancel={()=>clearTimeout(tt.current)}
+    onContextMenu={e=>e.preventDefault()}>
+    <td style={{padding:"10px 6px 10px 16px",width:34,color:"#d1d5db",fontFamily:"monospace",fontSize:11}}>{n}</td>
+    <td style={{padding:"10px 8px"}}>
+      <div style={{fontWeight:600,color:"#111827",fontSize:14,lineHeight:1.2}}>{tLn}<span style={{color:"#9ca3af",fontWeight:400}}>, </span>{tFn}</div>
+      {tlit&&<div style={{fontSize:10,color:"#9ca3af",lineHeight:1.2}}>{person.lastName}, {person.firstName}</div>}
+      <div style={{fontSize:10,fontFamily:"monospace",marginTop:2,display:"flex",alignItems:"center",gap:4}}>
+        <VBadge level={person.verificationLevel}/><span style={{color:"#d1d5db"}}>{person.serialId}</span>
+      </div>
+    </td>
+    <td style={{padding:"10px 8px",width:70}}><span style={{background:b.bg,color:b.fg,border:`1px solid ${b.br}`,borderRadius:99,padding:"2px 9px",fontSize:11,fontWeight:700}}>{person.sex}</span></td>
+    <td style={{padding:"10px 8px",color:"#4b5563",fontSize:13,minWidth:108}}>{NAT_FLAGS[person.nationality]||""} {person.nationality}</td>
+    <td style={{padding:"10px 16px 10px 8px",color:"#6b7280",fontSize:13,whiteSpace:"nowrap"}}>{fmtD(person.birthDate)}</td>
+  </tr>;
+}
+
+// ── SortTh ────────────────────────────────────────────────────────────────────
+function SortTh({ label, col, style, sortCol, sortDir, onSort }) {
+  const a=sortCol===col;
+  return <th onClick={()=>onSort(col)} style={{padding:"10px 8px",textAlign:"left",fontSize:11,fontWeight:800,color:a?"#1d4ed8":"#94a3b8",textTransform:"uppercase",letterSpacing:"0.06em",cursor:"pointer",userSelect:"none",whiteSpace:"nowrap",...style}}>
+    {label} <span style={{opacity:a?1:0.3}}>{a?(sortDir==="asc"?"▲":"▼"):"▲"}</span>
+  </th>;
+}
+
+// ── VerifyModal ───────────────────────────────────────────────────────────────
+function VerifyModal({ person, onVerify, onClose, t }) {
+  const [tab,setTab]=useState("email"); const [code,setCode]=useState(""); const [err,setErr]=useState(""); const [done,setDone]=useState(false);
+  const check=()=>{ if(code.toUpperCase()===DEMO_CODE){setDone(true);setTimeout(()=>{onVerify(person.id,"email");onClose();},1200);}else setErr(t.badCode); };
+  return <div style={{position:"fixed",inset:0,zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16,backgroundColor:"rgba(0,0,0,0.55)"}}>
+    <div style={{background:"#fff",borderRadius:20,width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.25)",overflow:"hidden",maxHeight:"92vh",overflowY:"auto"}}>
+      <div style={{padding:"18px 24px 16px",borderBottom:"1px solid #f3f4f6",display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:16,color:"#0f172a"}}>{t.verifyTitle}</div>
+          <div style={{fontSize:12,color:"#64748b",marginTop:3}}>{t.verifyDesc}</div>
+          <div style={{marginTop:6,display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#374151"}}><span style={{fontWeight:600}}>{person.firstName} {person.lastName}</span><span style={{color:"#9ca3af",fontFamily:"monospace"}}>{person.serialId}</span></div>
+        </div>
+        <button onClick={onClose} style={{width:28,height:28,borderRadius:"50%",border:"none",background:"#f1f5f9",cursor:"pointer",fontSize:16,color:"#64748b",flexShrink:0,marginLeft:8}}>×</button>
+      </div>
+      <div style={{display:"flex",borderBottom:"1px solid #f3f4f6"}}>
+        {[["email",t.vEmailTab],["govId",t.vGovTab]].map(([id,lb])=><button key={id} onClick={()=>{setTab(id);setErr("");setCode("");}}
+          style={{flex:1,padding:"10px 0",fontSize:13,fontWeight:tab===id?700:400,color:tab===id?"#2563eb":"#9ca3af",background:"none",border:"none",borderBottom:tab===id?"2px solid #2563eb":"2px solid transparent",cursor:"pointer",fontFamily:"inherit"}}>{lb}</button>)}
+      </div>
+      <div style={{padding:"20px 24px"}}>
+        {tab==="email"&&<>
+          <p style={{fontSize:13,color:"#374151",margin:"0 0 12px"}}>{t.vEmailDesc}</p>
+          <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#0369a1",marginBottom:14}}>
+            <strong>{t.demoHint}</strong> <code style={{fontSize:14,fontWeight:800,letterSpacing:"0.1em"}}>DEMO</code>
+          </div>
+          {done?<div style={{textAlign:"center",fontSize:18,padding:"8px 0"}}>✅ {t.vEmailTab} ✓</div>:<>
+            <input value={code} onChange={e=>{setCode(e.target.value);setErr("");}} placeholder={t.enterCode} onKeyDown={e=>e.key==="Enter"&&check()}
+              style={{width:"100%",fontSize:16,border:"1.5px solid #e5e7eb",borderRadius:10,padding:"9px 12px",outline:"none",fontFamily:"inherit",boxSizing:"border-box",letterSpacing:"0.08em"}}/>
+            {err&&<p style={{fontSize:12,color:"#ef4444",margin:"4px 0 0"}}>{err}</p>}
+            <button onClick={check} style={{marginTop:12,width:"100%",padding:"10px 0",background:"#2563eb",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{t.verifyBtn}</button>
+          </>}
+        </>}
+        {tab==="govId"&&<>
+          <p style={{fontSize:13,color:"#374151",margin:"0 0 10px"}}>{t.vGovDesc}</p>
+          <div style={{background:"#fafafa",border:"1px solid #e5e7eb",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#6b7280",marginBottom:14}}>
+            <div style={{fontWeight:700,color:"#374151",marginBottom:6}}>🔧 {t.vGovNote}</div>
+            <div style={{lineHeight:1.8}}>
+              {[["🌍 Global","Persona · Veriff · Onfido · Jumio"],["🇺🇸 US","id.me (optional US path)"],["🇪🇺 EU","eIDAS gateway"],["🇮🇳 India","Aadhaar OTP"],["🇬🇧 UK","GOV.UK One Login"],["🇦🇺 AU","myGovID"],["🇨🇦 CA","GCKey"]].map(([r,p])=><div key={r}><strong>{r}:</strong> {p}</div>)}
+            </div>
+          </div>
+          <div style={{fontSize:12,color:"#9ca3af",fontStyle:"italic",marginBottom:10}}>See BACKEND_VERIFY stubs in the source code to integrate.</div>
+          <button disabled style={{width:"100%",padding:"10px 0",background:"#f3f4f6",color:"#9ca3af",border:"none",borderRadius:12,fontWeight:700,fontSize:13,cursor:"not-allowed",fontFamily:"inherit"}}>{t.configureBackend}</button>
+        </>}
+      </div>
+    </div>
+  </div>;
+}
+
+// ── AddForm ───────────────────────────────────────────────────────────────────
+const EF={firstName:"",lastName:"",sex:"",nationality:"",birthDate:"",hometown:"",hometownMapUrl:"",hometownLat:null,hometownLon:null,eyeColor:"",hairColor:"",parents:"",siblings:"",children:"",spouse:""};
+function AddForm({ onAdd, onClose, t }) {
+  const [f,setF]=useState(EF),[errs,setErrs]=useState({});
+  const upd=(k,v)=>setF(p=>({...p,[k]:v}));
+  const validate=()=>{ const e={}; if(!f.firstName.trim())e.firstName="Required"; if(!f.lastName.trim())e.lastName="Required"; if(!f.sex)e.sex="Required"; if(!f.nationality)e.nationality="Required"; if(!f.birthDate)e.birthDate="Required"; else if((calcAg(f.birthDate)||0)<18)e.birthDate="Must be 18+"; setErrs(e); return!Object.keys(e).length; };
+  const secS={fontSize:10,fontWeight:900,color:"#94a3b8",letterSpacing:"0.08em",textTransform:"uppercase"};
+  return <div style={{position:"fixed",inset:0,zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:16,backgroundColor:"rgba(0,0,0,0.5)"}}>
+    <div style={{background:"#fff",borderRadius:20,width:"100%",maxWidth:440,display:"flex",flexDirection:"column",boxShadow:"0 20px 60px rgba(0,0,0,0.25)",maxHeight:"92vh"}}>
+      <div style={{padding:"18px 24px 16px",borderBottom:"1px solid #f3f4f6",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <div><div style={{fontWeight:900,fontSize:17,color:"#0f172a"}}>{t.addTitle}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{t.adultNote}</div></div>
+        <button onClick={onClose} style={{width:28,height:28,borderRadius:"50%",border:"none",background:"#f1f5f9",cursor:"pointer",fontSize:16,color:"#64748b"}}>×</button>
+      </div>
+      <div style={{padding:"18px 24px",overflowY:"auto",WebkitOverflowScrolling:"touch",flexGrow:1,display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"9px 12px",fontSize:12,color:"#92400e"}}>⚠️ {t.consent}</div>
+        <div style={secS}>{t.reqSec}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <FormField label={t.fnLbl} value={f.firstName} onChange={e=>upd("firstName",e.target.value)} error={errs.firstName} req ph="e.g. Maria"/>
+          <FormField label={t.lnLbl} value={f.lastName}  onChange={e=>upd("lastName", e.target.value)} error={errs.lastName}  req ph="e.g. Santos"/>
+        </div>
+        <div>
+          <label style={lbl}>{t.sexLbl} <span style={{color:"#f87171",marginLeft:3}}>*</span></label>
+          <div style={{display:"flex",gap:8}}>
+            {[["M",t.male],["F",t.female],["NB",t.nb]].map(([v,lx])=>{ const b=BADGE[v],a=f.sex===v; return <button key={v} onClick={()=>upd("sex",v)} style={{flex:1,padding:"8px 4px",borderRadius:10,border:`2px solid ${a?b.fg:b.br}`,background:a?b.bg:"#fff",color:a?b.fg:"#9ca3af",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{lx}</button>; })}
+          </div>
+          {errs.sex&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ef4444"}}>{errs.sex}</p>}
+        </div>
+        <div><label style={lbl}>{t.natLbl} <span style={{color:"#f87171",marginLeft:3}}>*</span></label><NatSelect value={f.nationality} onChange={v=>upd("nationality",v)} error={errs.nationality} t={t}/></div>
+        <FormField label={t.dobLbl} value={f.birthDate} onChange={e=>upd("birthDate",e.target.value)} error={errs.birthDate} req type="date" max={new Date().toISOString().split("T")[0]}/>
+        <div style={{...secS,marginTop:4}}>{t.optSec}</div>
+        <div>
+          <label style={{...lbl,marginBottom:6}}>{t.hometownLbl} <span style={{fontSize:10,fontWeight:400,textTransform:"none",color:"#94a3b8",marginLeft:4}}>→ auto-generates Google Maps link</span></label>
+          <HometownInput value={f.hometown} mapUrl={f.hometownMapUrl}
+            onSelect={d=>setF(p=>({...p,hometown:d.display,hometownMapUrl:d.mapUrl,hometownLat:d.lat,hometownLon:d.lon}))}
+            onClear={()=>setF(p=>({...p,hometown:"",hometownMapUrl:"",hometownLat:null,hometownLon:null}))} t={t}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <FormField label={t.eyeLbl}  value={f.eyeColor}  onChange={e=>upd("eyeColor",e.target.value)}  ph="e.g. Brown"/>
+          <FormField label={t.hairLbl} value={f.hairColor} onChange={e=>upd("hairColor",e.target.value)} ph="e.g. Black"/>
+        </div>
+        <FormField label={t.parentsLbl}  value={f.parents}  onChange={e=>upd("parents",e.target.value)}  ph="e.g. João Santos, Ana Santos"/>
+        <FormField label={t.siblingsLbl} value={f.siblings} onChange={e=>upd("siblings",e.target.value)} ph="e.g. Carlos Santos"/>
+        <FormField label={t.childrenLbl} value={f.children} onChange={e=>upd("children",e.target.value)} ph="e.g. Sofia Santos"/>
+        <FormField label={t.spouseLbl}   value={f.spouse}   onChange={e=>upd("spouse",e.target.value)}   ph="e.g. Pedro Lima"/>
+      </div>
+      <div style={{padding:"14px 24px",borderTop:"1px solid #f3f4f6",display:"flex",gap:10,flexShrink:0}}>
+        <button onClick={onClose} style={{flex:1,padding:"10px 0",border:"1.5px solid #e5e7eb",borderRadius:12,background:"#fff",color:"#6b7280",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{t.cancel}</button>
+        <button onClick={()=>{if(validate())onAdd(f);}} style={{flex:2,padding:"10px 0",border:"none",borderRadius:12,background:"#2563eb",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>{t.submit}</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [people,setPeople]=useState([]); const [counter,setCounter]=useState(0); const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState(""); const [sexF,setSexF]=useState("ALL"); const [natF,setNatF]=useState("");
+  const [sortCol,setSortCol]=useState("lastName"); const [sortDir,setSortDir]=useState("asc");
+  const [showForm,setShowForm]=useState(false); const [hov,setHov]=useState(null);
+  const [toast,setToast]=useState(""); const [verifyPerson,setVerifyPerson]=useState(null);
+  const [lang,setLang]=useState("en"); const [t,setT]=useState(BASE);
+  const [translit,setTranslit]=useState({}); const [loadingUI,setLoadingUI]=useState(false); const [loadingNames,setLoadingNames]=useState(false);
+  const showTR=useRef(null),hideTR=useRef(null),toastT=useRef(null);
+
+  // Dismiss the hover card when tapping elsewhere (touch devices)
+  useEffect(()=>{
+    const h=e=>{ if(!e.target.closest?.("[data-hc]")) setHov(null); };
+    document.addEventListener("touchstart",h);
+    return()=>document.removeEventListener("touchstart",h);
+  },[]);
+
+  useEffect(()=>{
+    (async()=>{
+      let ppl,cnt;
+      try{ const r=await window.storage.get("humanity-reg-v2"); ppl=JSON.parse(r.value); }
+      catch{ ppl=SAMPLE; }
+      let maxN=0;
+      ppl=ppl.map((p,i)=>{ if(p.serialId){const n=parseInt(p.serialId.slice(3));if(n>maxN)maxN=n;return{verificationLevel:"none",...p};} const n=i+1;if(n>maxN)maxN=n;return{verificationLevel:"none",...p,serialId:fmt6(n)}; });
+      try{const c=await window.storage.get("humanity-reg-counter-v2");cnt=Math.max(parseInt(c.value)||0,maxN);}catch{cnt=maxN;}
+      try{await window.storage.set("humanity-reg-v2",JSON.stringify(ppl));}catch{}
+      try{await window.storage.set("humanity-reg-counter-v2",String(cnt));}catch{}
+      const detected=(navigator.language||"en").split("-")[0].toLowerCase();
+      const validLang=LANGS.find(l=>l.c===detected)?.c||"en";
+      setPeople(ppl); setCounter(cnt); setLoading(false);
+      if(validLang!=="en"){ setLang(validLang); applyLang(validLang,ppl); }
+    })();
+  },[]);
+
+  const persist=async(data,cnt)=>{ try{await window.storage.set("humanity-reg-v2",JSON.stringify(data));}catch{} if(cnt!==undefined){try{await window.storage.set("humanity-reg-counter-v2",String(cnt));}catch{}} };
+
+  const applyLang=async(lc,pplList)=>{
+    const lo=LANGS.find(l=>l.c===lc);
+    setLoadingUI(true);
+    try{
+      let tr; try{const r=await window.storage.get(`ui-t-${lc}`);tr=JSON.parse(r.value);}catch{}
+      if(!tr){tr=await fetchUITranslation(lc,lo?.l||lc);if(tr)try{await window.storage.set(`ui-t-${lc}`,JSON.stringify(tr));}catch{}}
+      if(tr) setT({...BASE,...tr});
+    }catch{} setLoadingUI(false);
+    const script=NL_SCRIPTS[lc];
+    if(script){
+      setLoadingNames(true);
+      try{
+        let mp; try{const r=await window.storage.get(`nt-${lc}`);mp=JSON.parse(r.value);}catch{}
+        if(!mp){const names=(pplList||people).map(p=>`${p.firstName}|${p.lastName}`);mp=await fetchTranslit(names,script);if(mp)try{await window.storage.set(`nt-${lc}`,JSON.stringify(mp));}catch{}}
+        if(mp) setTranslit(mp);
+      }catch{setTranslit({});} setLoadingNames(false);
+    } else setTranslit({});
+  };
+
+  const changeLang=lc=>{ setLang(lc); if(lc==="en"){setT(BASE);setTranslit({});}else applyLang(lc,people); };
+
+  const addPerson=async data=>{
+    const newCnt=counter+1;
+    const person={...data,id:`p_${Date.now()}`,serialId:fmt6(newCnt),verificationLevel:"none",addedAt:Date.now()};
+    const updated=[...people,person]; setPeople(updated); setCounter(newCnt); persist(updated,newCnt); setShowForm(false);
+    setToast(`${data.firstName} ${data.lastName} · ${fmt6(newCnt)}`);
+    clearTimeout(toastT.current); toastT.current=setTimeout(()=>setToast(""),4500);
+    const script=NL_SCRIPTS[lang];
+    if(script){ try{ const key=`${data.firstName}|${data.lastName}`; if(!translit[key]){ const mp=await fetchTranslit([key],script); if(mp?.[key]){ const upd={...translit,...mp}; setTranslit(upd); try{await window.storage.set(`nt-${lang}`,JSON.stringify(upd));}catch{} } } }catch{} }
+  };
+
+  const verifyCallback=(personId,level)=>{
+    setPeople(prev=>{ const upd=prev.map(p=>p.id===personId?{...p,verificationLevel:level}:p); persist(upd); return upd; });
+  };
+
+  const onEnter=(p,r)=>{clearTimeout(hideTR.current);clearTimeout(showTR.current);showTR.current=setTimeout(()=>setHov({person:p,rect:r}),100);};
+  const onLeave=()=>{clearTimeout(showTR.current);hideTR.current=setTimeout(()=>setHov(null),400);};
+  const onCardEnter=()=>clearTimeout(hideTR.current);
+  const onCardLeave=()=>{hideTR.current=setTimeout(()=>setHov(null),200);};
+
+  const nats=useMemo(()=>[...new Set(people.map(p=>p.nationality))].sort(),[people]);
+  const rows=useMemo(()=>{
+    const q=search.toLowerCase();
+    return people.filter(p=>{
+      if(q&&!`${p.firstName} ${p.lastName} ${p.nationality} ${p.serialId||""}`.toLowerCase().includes(q))return false;
+      if(sexF!=="ALL"&&p.sex!==sexF)return false; if(natF&&p.nationality!==natF)return false; return true;
+    }).sort((a,b)=>{ const av=String(a[sortCol]||"").toLowerCase(),bv=String(b[sortCol]||"").toLowerCase(); const c=av<bv?-1:av>bv?1:0; return sortDir==="asc"?c:-c; });
+  },[people,search,sexF,natF,sortCol,sortDir]);
+
+  const hs=col=>{if(sortCol===col)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortCol(col);setSortDir("asc");}};
+  const thP={sortCol,sortDir,onSort:hs};
+  const filtersOn=sexF!=="ALL"||natF||search;
+  const isRTL=RTL.has(lang);
+
+  if(loading) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#94a3b8",fontFamily:"system-ui"}}>Loading…</div>;
+
+  return <div style={{minHeight:"100vh",background:"#f8fafc",fontFamily:"system-ui,-apple-system,sans-serif",direction:isRTL?"rtl":"ltr"}}>
+    {loadingUI&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:500,background:"#1e3a8a",color:"#fff",textAlign:"center",padding:"6px",fontSize:12,fontWeight:600}}>{t.loadingUI}</div>}
+    {loadingNames&&!loadingUI&&<div style={{position:"fixed",top:0,left:0,right:0,zIndex:500,background:"#7c3aed",color:"#fff",textAlign:"center",padding:"6px",fontSize:12,fontWeight:600}}>{t.loadingNames}</div>}
+
+    <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0"}}>
+      <div style={{maxWidth:920,margin:"0 auto",padding:"20px 16px",display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+        <div style={{minWidth:0}}>
+          <h1 style={{margin:0,fontSize:22,fontWeight:900,color:"#0f172a",letterSpacing:"-0.02em"}}>🌍 {t.title}</h1>
+          <p style={{margin:"4px 0 0",fontSize:13,color:"#64748b"}}>{t.subtitle}</p>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,flexShrink:0}}>
+          <div style={{textAlign:"right"}}><div style={{fontSize:28,fontWeight:900,color:"#2563eb",lineHeight:1}}>{people.length.toLocaleString()}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{t.listed}</div></div>
+          <LangSelect current={lang} onChange={changeLang}/>
+        </div>
+      </div>
+    </div>
+
+    <div style={{background:"#fff",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,zIndex:30}}>
+      <div style={{maxWidth:920,margin:"0 auto",padding:"10px 16px",display:"flex",flexWrap:"wrap",alignItems:"center",gap:8}}>
+        <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder={t.search}
+          style={{fontSize:16,border:"1.5px solid #e2e8f0",borderRadius:10,padding:"7px 12px",outline:"none",flex:"1 1 200px",minWidth:0,fontFamily:"inherit"}}/>
+        <div style={{display:"flex",gap:4}}>
+          {[["ALL",t.all],["M",t.male],["F",t.female],["NB",t.nb]].map(([v,l])=>(
+            <button key={v} onClick={()=>setSexF(v)} style={{fontSize:12,fontWeight:700,padding:"6px 12px",borderRadius:99,border:`1.5px solid ${sexF===v?"#1e3a8a":"#e2e8f0"}`,background:sexF===v?"#1e3a8a":"#fff",color:sexF===v?"#fff":"#64748b",cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+          ))}
+        </div>
+        <select value={natF} onChange={e=>setNatF(e.target.value)} style={{fontSize:14,border:"1.5px solid #e2e8f0",borderRadius:10,padding:"7px 10px",color:"#374151",background:"#fff",outline:"none",fontFamily:"inherit"}}>
+          <option value="">{t.allNats}</option>
+          {nats.map(n=><option key={n} value={n}>{NAT_FLAGS[n]||""} {n}</option>)}
+        </select>
+        {filtersOn&&<button onClick={()=>{setSearch("");setSexF("ALL");setNatF("");}} style={{fontSize:12,color:"#94a3b8",background:"none",border:"none",cursor:"pointer",textDecoration:"underline",fontFamily:"inherit"}}>{t.clear}</button>}
+        <div style={{display:"flex",gap:8,alignItems:"center",marginLeft:4}}>
+          {Object.values(VL).map(v=><span key={v.label} title={v.label} style={{color:v.fg,fontSize:13,cursor:"default"}}>{v.icon}</span>)}
+        </div>
+        <button onClick={()=>setShowForm(true)} style={{marginLeft:"auto",background:"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"8px 16px",fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 1px 4px rgba(37,99,235,0.3)"}}>{t.addBtn}</button>
+      </div>
+    </div>
+
+    <div style={{maxWidth:920,margin:"0 auto",padding:"20px 16px"}}>
+      {rows.length===0?(
+        <div style={{textAlign:"center",padding:"80px 0",color:"#94a3b8"}}>
+          <div style={{fontSize:48,marginBottom:12}}>🔍</div>
+          <p style={{fontWeight:700,margin:0,color:"#64748b",fontSize:15}}>{t.noResults}</p>
+          <p style={{fontSize:13,marginTop:6}}>{t.tryDiff} <button onClick={()=>{setSearch("");setSexF("ALL");setNatF("");}} style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>{t.clearF}</button>.</p>
+        </div>
+      ):(
+        <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,0.06)"}}>
+          <div style={{padding:"8px 16px",background:"#f8fafc",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontSize:12,color:"#94a3b8"}}>{rows.length.toLocaleString()}{rows.length!==people.length?` ${t.of} ${people.length.toLocaleString()}`:""} {rows.length===1?t.entry:t.entries}</span>
+            <span style={{fontSize:11,color:"#9ca3af",fontStyle:"italic"}}>{t.hint}</span>
+          </div>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr style={{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}}>
+                <th style={{padding:"10px 6px 10px 16px",width:34,textAlign:"left",fontSize:11,fontWeight:700,color:"#d1d5db",userSelect:"none"}}>#</th>
+                <SortTh label={t.colName} col="lastName"    {...thP}/>
+                <SortTh label={t.colSex}  col="sex"         {...thP}/>
+                <SortTh label={t.colNat}  col="nationality" {...thP}/>
+                <SortTh label={t.colBorn} col="birthDate"   style={{paddingRight:16}} {...thP}/>
+              </tr></thead>
+              <tbody>{rows.map((p,i)=><PersonRow key={p.id} n={i+1} person={p} onEnter={onEnter} onLeave={onLeave} translit={translit}/>)}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <p style={{fontSize:12,color:"#94a3b8",textAlign:"center",marginTop:16,lineHeight:1.6}}>{t.footer}</p>
+    </div>
+
+    {hov&&!verifyPerson&&<HoverCard person={hov.person} rect={hov.rect} onEnter={onCardEnter} onLeave={onCardLeave} t={t} translit={translit} onVerify={p=>{setVerifyPerson(p);setHov(null);}}/>}
+    {showForm&&<AddForm onAdd={addPerson} onClose={()=>setShowForm(false)} t={t}/>}
+    {verifyPerson&&<VerifyModal person={verifyPerson} t={t} onVerify={verifyCallback} onClose={()=>setVerifyPerson(null)}/>}
+
+    {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"#1e3a8a",color:"#fff",padding:"10px 22px",borderRadius:12,fontSize:13,fontWeight:700,zIndex:300,boxShadow:"0 4px 16px rgba(0,0,0,0.2)",maxWidth:"90vw"}}>✓ {toast}</div>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
